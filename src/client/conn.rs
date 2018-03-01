@@ -16,7 +16,8 @@ use futures::future::{self, Either};
 use tokio_io::{AsyncRead, AsyncWrite};
 
 use proto;
-use super::{dispatch, Request, Response};
+use super::dispatch;
+use {Body, Request, Response, StatusCode};
 
 /// Returns a `Handshake` future over some IO.
 ///
@@ -31,7 +32,7 @@ where
 
 /// The sender side of an established connection.
 pub struct SendRequest<B> {
-    dispatch: dispatch::Sender<proto::dispatch::ClientMsg<B>, ::Response>,
+    dispatch: dispatch::Sender<proto::dispatch::ClientMsg<B>, Response<Body>>,
 
 }
 
@@ -79,7 +80,7 @@ pub struct Handshake<T, B> {
 pub struct ResponseFuture {
     // for now, a Box is used to hide away the internal `B`
     // that can be returned if canceled
-    inner: Box<Future<Item=Response, Error=::Error>>,
+    inner: Box<Future<Item=Response<Body>, Error=::Error>>,
 }
 
 /// Deconstructed parts of a `Connection`.
@@ -180,7 +181,8 @@ where
     /// # }
     /// # fn main() {}
     /// ```
-    pub fn send_request(&mut self, mut req: Request<B>) -> ResponseFuture {
+    pub fn send_request(&mut self, req: Request<B>) -> ResponseFuture {
+        /* TODO?
         // The Connection API does less things automatically than the Client
         // API does. For instance, right here, we always assume set_proxy, so
         // that if an absolute-form URI is provided, it is serialized as-is.
@@ -191,6 +193,7 @@ where
         // It's important that this method isn't called directly from the
         // `Client`, so that `set_proxy` there is still respected.
         req.set_proxy(true);
+        */
         let inner = self.send_request_retryable(req).map_err(|e| {
             let (err, _orig_req) = e;
             err
@@ -201,9 +204,8 @@ where
     }
 
     //TODO: replace with `impl Future` when stable
-    pub(crate) fn send_request_retryable(&mut self, req: Request<B>) -> Box<Future<Item=Response, Error=(::Error, Option<(::proto::RequestHead, Option<B>)>)>> {
-        let (head, body) = proto::request::split(req);
-        let inner = match self.dispatch.send((head, body)) {
+    pub(crate) fn send_request_retryable(&mut self, req: Request<B>) -> Box<Future<Item=Response<Body>, Error=(::Error, Option<Request<B>>)>> {
+        let inner = match self.dispatch.send(req) {
             Ok(rx) => {
                 Either::A(rx.then(move |res| {
                     match res {
@@ -403,7 +405,7 @@ where
     B: Stream<Error=::Error> + 'static,
     B::Item: AsRef<[u8]>,
     R: proto::Http1Transaction<
-        Incoming=proto::RawStatus,
+        Incoming=StatusCode,
         Outgoing=proto::RequestLine,
     >,
 {
@@ -436,7 +438,7 @@ where
 // ===== impl ResponseFuture
 
 impl Future for ResponseFuture {
-    type Item = Response;
+    type Item = Response<Body>;
     type Error = ::Error;
 
     #[inline]
@@ -485,3 +487,4 @@ impl AssertSendSync for Builder {}
 // thing.
 //#[doc(hidden)]
 //impl AssertSend for ResponseFuture {}
+
